@@ -4,6 +4,24 @@
 #include <vector>
 #include <random>
 
+template <class Node> void traverse(const Node &node) {
+    if (node.elements().size() > 5) {
+      log_debug("node with %zu elements @ level %d",
+        node.elements().size(),
+        node.getLevel());
+    }
+
+    /*log_debug("%s%s%s",
+      node.isLastSibling() ? " last sibling" : "",
+      node.isLastAtThisLevel() ? " last at level" : "",
+      node.isLeaf() ? " leaf" : "");*/
+
+    if (!node.isLeaf()) for (auto child : node.children()) {
+        // log_debug("child of node at level %d", node.getLevel());
+        traverse(child);
+    }
+}
+
 int main() {
     using Coordinate = double;
     using Vertex = std::array<Coordinate, 3>;
@@ -30,11 +48,16 @@ int main() {
     ZOrderOctree<Vertex, Coordinate> octree(
         vertices.data(),
         vertices.data() + vertices.size(),
-        { .leafSize = 0.1 });
+        { .leafSize = 0.1, .rootLevel = 10 });
 
-    for (const auto *point : octree.lookup(Vertex { 0, 0, 0 }, 9)) {
+    for (const auto *point : octree.lookup(Vertex { 0, 0, 0 }, 9).elements()) {
         log_debug("%g\t%g\t%g", (*point)[0], (*point)[1], (*point)[2]);
     }
+
+    log_debug("%zu elements in a probably empty node",
+      octree.lookup(Vertex { 10, 10, 10 }, 0).elements().size());
+
+    traverse(octree.root());
 
     return 0;
 }

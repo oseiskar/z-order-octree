@@ -22,6 +22,7 @@ public:
         Vector3 origin = { 0, 0, 0 };
         float leafSize = 1.0;
         bool stableSort = false;
+        size_t rootLevel = std::numeric_limits<ZIndex>::digits / 3;
     };
 
     struct Workspace {
@@ -32,9 +33,12 @@ public:
 
     ZOrderOctree(const Element* elementsBegin, const Element *elementsEnd, const Parameters &params, Workspace *workspace = nullptr)
     :
-        minCorner(saxpy(-params.leafSize * HALF_MAX_COORD, { 1, 1, 1 }, params.origin)),
+        rootLevel(params.rootLevel),
+        minCorner(saxpy(-params.leafSize * (1 << (params.rootLevel - 1)), { 1, 1, 1 }, params.origin)),
         leafSize(params.leafSize)
     {
+        assert(rootLevel <= std::numeric_limits<ZIndex>::digits / 3);
+
         // log_debug("minCorner %g,%g,%g", minCorner[0], minCorner[1], minCorner[2]);
         Workspace workNew;
         Workspace *tmp = workspace;
@@ -70,41 +74,199 @@ public:
         }
     }
 
-    struct Range {
-        using Iterator = const Element**;
-        Iterator b = nullptr, e = nullptr;
+    class ElementRange {
+    public:
+        using Iterator = const Element * const *;
         Iterator begin() const { return b; }
         Iterator end() const { return e; }
+
+        size_t size() const {
+            return e - b;
+        }
+
+        ElementRange(Iterator b, Iterator e) : b(b), e(e) {}
+
+    private:
+        Iterator b = nullptr, e = nullptr;
     };
 
-    template <class Point> Range lookup(const Point &point, int level) {
+    class NodeRange;
+
+    class Node {
+    public:
+        Node(const ZOrderOctree &t, ZIndex zidx, int level) :
+            tree(&t),
+            level(level),
+            zindex(zidx)
+        {
+            ZIndex mask = levelMask(level);
+            zindex = zindex & mask;
+            elementsBegin = tree->findRange(zindex, mask, true);
+            elementsEnd = tree->findRange(zindex, mask, false);
+            // log_debug("node %lx at level %d, elements %zu to %zu", zindex, level, elementsBegin, elementsEnd);
+        }
+
+        // "end node" marker
+        Node() :
+          tree(nullptr),
+          zindex(0),
+          level(-1),
+          elementsBegin(0),
+          elementsEnd(0)
+        {}
+
+        int getLevel() const {
+            return level;
+        }
+
+        bool isLeaf() const {
+            return level == 0 || isEndNode() || empty();
+        }
+
+        Node firstChild() const {
+            assert(!isLeaf());
+            return Node(*tree, tree->zindices.at(elementsBegin), level - 1);
+        }
+
+        bool isLastAtThisLevel() const {
+            if (isEndNode()) return true;
+            return elementsEnd == tree->zindices.size();
+        }
+
+        bool isLastSibling() const {
+            if (isLastAtThisLevel()) return true;
+            ZIndex parentMask = levelMask(level + 1);
+            return (zindex & parentMask) != (tree->zindices.at(elementsEnd) & parentMask);
+        }
+
+        Node nextAtThisLevel() const {
+            assert(!isLastAtThisLevel());
+            return Node(*tree, tree->zindices.at(elementsEnd), level);
+        }
+
+        Node nextSibling() const {
+            assert(!isLastSibling());
+            return nextAtThisLevel();
+        }
+
+        bool isEndNode() const {
+            return tree == nullptr;
+        }
+
+        bool operator==(const Node &other) const {
+            if (isEndNode()) return other.isEndNode();
+            return tree == other.tree &&
+                level == other.level &&
+                zindex == other.zindex;
+        }
+
+        NodeRange children() const {
+            assert(!isLeaf());
+            Node child = firstChild();
+            assert(!child.empty());
+            return NodeRange(child, true);
+        }
+
+        ElementRange elements() const {
+            assert(!isEndNode());
+            return tree->buildRange(elementsBegin, elementsEnd);
+        }
+
+        bool empty() const {
+            return elementsEnd == elementsBegin;
+        }
+
+    private:
+        const ZOrderOctree *tree;
+        int level;
+        ZIndex zindex;
+        size_t elementsBegin, elementsEnd;
+    };
+
+    class LevelIterator {
+    public:
+        LevelIterator(const Node &node, bool siblingsOnly) : node(node), siblings(siblingsOnly) {}
+
+        const Node &operator*() const {
+            assert(!node.isEndNode());
+            return node;
+        }
+
+        LevelIterator &operator++() { // prefix OP, ++itr
+            if ((siblings && node.isLastSibling()) ||
+                (!siblings && node.isLastAtThisLevel())) {
+                node = Node();
+            } else {
+                node = node.nextAtThisLevel();
+            }
+            return *this;
+        }
+
+        bool operator==(const LevelIterator &other) const {
+            return node == other.node && siblings == other.siblings;
+        }
+
+        bool operator!=(const LevelIterator &other) const {
+            return !(*this == other);
+        }
+
+    private:
+        Node node;
+        const bool siblings;
+    };
+
+    class NodeRange {
+    private:
+        LevelIterator b, e;
+
+    public:
+        NodeRange(Node beginNode, bool siblingsOnly) :
+          b(beginNode, siblingsOnly),
+          e(Node(), siblingsOnly)
+        {}
+        LevelIterator begin() const { return b; }
+        LevelIterator end() const { return e; }
+        bool empty() const { return b == e; }
+    };
+
+    template<class Point> Node lookup(const Point &point, int level) const {
+        assert(level >= 0 && level < rootLevel);
         ZIndex zindex = getZIndex(point);
-        if (zindex == INVALID_COORD) return {};
+        if (zindex == INVALID_COORD) return Node();
+
+        return Node(*this, zindex, level);
+    }
+
+    Node root() const {
+        return Node(*this, zindices.empty() ? 0 : *zindices.begin(), rootLevel);
+    }
+
+    NodeRange nodesAtLevel(int level) const {
+        assert(level >= 0 && level < rootLevel);
+        return NodeRange(Node(*this, zindices.empty() ? 0 : *zindices.begin(), level), false);
+    }
+
+private:
+    ElementRange buildRange(size_t elementsBegin, size_t elementsEnd) const {
+        return ElementRange(
+          elements.data() + elementsBegin,
+          elements.data() + elementsEnd);
+    }
+
+    static ZIndex levelMask(int level) {
         ZIndex mask = 0;
         for (int l = 0; l < level; ++l) {
             mask = (mask << 3l) | 0x7l;
         }
-        mask = std::numeric_limits<ZIndex>::max() ^ mask;
-        zindex = zindex & mask;
-
-        // log_debug("lookup %g,%g,%g -> zindex %lx, mask %lx, sz %g^3", point[0], point[1], point[2], zindex, mask, leafSize * (1 << level));
-
-        Range r;
-        r.b = elements.data() + findRange(zindex & mask, mask, true);
-        r.e = elements.data() + findRange(zindex & mask, mask, false);
-        return r;
+        return std::numeric_limits<ZIndex>::max() ^ mask;
     }
 
-private:
     static Vector3 saxpy(Float alpha, const Vector3 &x, const Vector3 &y) {
         Vector3 r;
         for (size_t i = 0; i < 3; ++i) r[i] = alpha * x[i] + y[i];
         return r;
     }
 
-    static constexpr ZIndex BITS_PER_COORD = std::numeric_limits<ZIndex>::digits / 3;
-    static constexpr ZIndex HALF_MAX_COORD = 1 << (BITS_PER_COORD - 1);
-    static constexpr ZIndex MAX_COORD = 2 * HALF_MAX_COORD;
     static constexpr ZIndex INVALID_COORD = std::numeric_limits<ZIndex>::max();
 
     size_t findRange(ZIndex target, ZIndex mask, bool findBegin) const {
@@ -127,10 +289,11 @@ private:
 
     template <class Point> ZIndex getZIndex(const Point &xyz) const {
         ZIndex zindex = 0;
+        const int maxCoord = 1 << rootLevel;
         for (int d = 0; d < 3; ++d) {
             int coord = (xyz[d] - minCorner[d]) / leafSize;
             // log_debug("getZIndex, coord. %d: %g -> %d", d, xyz[d], coord);
-            if (coord < 0 || coord >= MAX_COORD) return INVALID_COORD;
+            if (coord < 0 || coord >= maxCoord) return INVALID_COORD;
             zindex |= interleaveBits(coord) << d;
         }
         // log_debug("getZIndex -> %lx", zindex);
@@ -149,6 +312,7 @@ private:
         return static_cast<ZIndex>(x);
     }
 
+    const ZIndex rootLevel;
     const Vector3 minCorner;
     const float leafSize;
     std::vector<size_t> zindices;
