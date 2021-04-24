@@ -76,21 +76,18 @@ int main() {
     printf("generated %zu points\n", vertices.size());
 
     ZOrderOctree<Vertex, Coordinate> octree({ .leafSize = 0.1 });
-    auto work = octree.buildWorkspace();
 
     {
       Timer timer("octree build 1/2");
       octree.addData(
           vertices.data(),
-          vertices.size() / 2,
-          &work);
+          vertices.size() / 2);
     }
     {
       Timer timer("octree build 1/2");
       octree.addData(
           vertices.data() + vertices.size() / 2,
-          vertices.size() - vertices.size() / 2,
-          &work);
+          vertices.size() - vertices.size() / 2);
     }
     {
       Timer timer("octree data removal");
@@ -104,6 +101,8 @@ int main() {
       });
       printf("removed %zu point(s)\n", nRemoved);
     }
+
+    octree.clearWorkspace();
 
     {
         Timer timer("lookup");

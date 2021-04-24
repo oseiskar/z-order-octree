@@ -25,24 +25,6 @@ public:
         size_t rootLevel = std::numeric_limits<ZIndex>::digits / 3;
     };
 
-    struct Workspace {
-        std::vector<size_t> order;
-        std::vector<ZIndex> zindices;
-        std::vector<const Element*> elements;
-
-        void clear() {
-            order.clear();
-            zindices.clear();
-            elements.clear();
-        }
-
-        void reserve(size_t n) {
-            order.reserve(n);
-            zindices.reserve(n);
-            elements.reserve(n);
-        }
-    };
-
     ZOrderOctree(const Parameters &params)
     :
         params(params),
@@ -56,51 +38,48 @@ public:
         elements.clear();
     }
 
-    void addData(const Element* elementsBegin, size_t nElements, Workspace *workspace = nullptr) {
+    void addData(const Element* elementsBegin, size_t nElements) {
         // log_debug("minCorner %g,%g,%g", minCorner[0], minCorner[1], minCorner[2]);
-        Workspace workNew;
-        Workspace *tmp = workspace;
-        if (!tmp) tmp = &workNew;
-        tmp->clear();
-        tmp->reserve(nElements + zindices.size());
+        tmp.clear();
+        tmp.reserve(nElements + zindices.size());
 
         assert(zindices.size() == elements.size());
 
         // add existing data (note: it could be faster to do a custom merge-sort)
         for (size_t i = 0; i < zindices.size(); ++i) {
-            tmp->zindices.push_back(zindices.at(i));
-            tmp->elements.push_back(elements.at(i));
-            tmp->order.push_back(tmp->order.size());
+            tmp.zindices.push_back(zindices.at(i));
+            tmp.elements.push_back(elements.at(i));
+            tmp.order.push_back(tmp.order.size());
         }
 
         zindices.clear();
         elements.clear();
 
         for (const auto *itr = elementsBegin; itr != (elementsBegin + nElements); ++itr) {
-            tmp->elements.push_back(&*itr);
-            tmp->zindices.push_back(getZIndex(*itr));
-            tmp->order.push_back(tmp->order.size());
+            tmp.elements.push_back(&*itr);
+            tmp.zindices.push_back(getZIndex(*itr));
+            tmp.order.push_back(tmp.order.size());
         }
 
-        assert(tmp->order.size() == tmp->zindices.size());
-        const auto cmp = [&tmp](size_t a, size_t b) -> int {
-            return tmp->zindices.at(a) < tmp->zindices.at(b);
+        assert(tmp.order.size() == tmp.zindices.size());
+        const auto cmp = [this](size_t a, size_t b) -> int {
+            return tmp.zindices.at(a) < tmp.zindices.at(b);
         };
         if (params.stableSort) {
-            std::stable_sort(tmp->order.begin(), tmp->order.end(), cmp);
+            std::stable_sort(tmp.order.begin(), tmp.order.end(), cmp);
         } else {
-            std::sort(tmp->order.begin(), tmp->order.end(), cmp);
+            std::sort(tmp.order.begin(), tmp.order.end(), cmp);
         }
 
-        elements.reserve(tmp->elements.size());
-        zindices.reserve(tmp->zindices.size());
-        for (size_t idx : tmp->order) {
-            const auto zidx = tmp->zindices.at(idx);
+        elements.reserve(tmp.elements.size());
+        zindices.reserve(tmp.zindices.size());
+        for (size_t idx : tmp.order) {
+            const auto zidx = tmp.zindices.at(idx);
             if (zidx == INVALID_COORD) break;
             else assert(zidx < INVALID_COORD);
             // log_debug("order: %zu (zindex %lx)", idx, zidx);
-            zindices.push_back(tmp->zindices.at(idx));
-            elements.push_back(tmp->elements.at(idx));
+            zindices.push_back(tmp.zindices.at(idx));
+            elements.push_back(tmp.elements.at(idx));
         }
     }
 
@@ -122,8 +101,8 @@ public:
         zindices.resize(nLeft);
     }
 
-    Workspace buildWorkspace() const {
-        return {};
+    void clearWorkspace() {
+        tmp = {}; // should deallocate
     }
 
     class ElementRange {
@@ -315,6 +294,24 @@ public:
     }
 
 private:
+    struct Workspace {
+        std::vector<size_t> order;
+        std::vector<ZIndex> zindices;
+        std::vector<const Element*> elements;
+
+        void clear() {
+            order.clear();
+            zindices.clear();
+            elements.clear();
+        }
+
+        void reserve(size_t n) {
+            order.reserve(n);
+            zindices.reserve(n);
+            elements.reserve(n);
+        }
+    } tmp;
+
     ElementRange buildRange(size_t elementsBegin, size_t elementsEnd) const {
         return ElementRange(
           elements.data() + elementsBegin,
