@@ -9,9 +9,12 @@
 namespace {
 template <class Node> void traverse(const Node &node) {
     if (node.elements().size() > 5) {
-      printf("node with %zu elements @ level %d\n",
+      const auto c = node.center();
+      printf("node (%g, %g, %g) with %zu elements @ level %d, size %g\n",
+        c[0], c[1], c[2],
         node.elements().size(),
-        node.getLevel());
+        node.getLevel(),
+        node.sideLength());
     }
 
     /*log_debug("%s%s%s",

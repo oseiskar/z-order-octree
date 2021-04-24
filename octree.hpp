@@ -176,6 +176,22 @@ public:
             return elementsEnd == elementsBegin;
         }
 
+        Vector3 minCorner() const {
+            return tree->zIndexToPoint(zindex, level, 0);
+        }
+
+        Vector3 maxCorner() const {
+            return tree->zIndexToPoint(zindex, level, 1);
+        }
+
+        Vector3 center() const {
+            return tree->zIndexToPoint(zindex, level, 0.5);
+        }
+
+        Float sideLength() const {
+            return tree->leafSize * (1 << level);
+        }
+
     private:
         const ZOrderOctree *tree;
         int level;
@@ -251,6 +267,22 @@ private:
         return ElementRange(
           elements.data() + elementsBegin,
           elements.data() + elementsEnd);
+    }
+
+    Vector3 zIndexToPoint(ZIndex zindex, int level, Float cellOffset) const {
+        int coords[3] = { 0, 0, 0 };
+        for (int l = rootLevel; l >= level; --l) {
+            for (int d = 0; d < 3; ++d) {
+                int bit = (zindex >> (3*l + d)) & 0x1;
+                if (bit) coords[d] += 1 << level;
+            }
+        }
+        Vector3 v;
+        const Float offs = leafSize * (1 << level) * cellOffset;
+        for (int d = 0; d < 3; ++d) {
+            v[d] = coords[d] * leafSize + minCorner[d] + offs;
+        }
+        return v;
     }
 
     static ZIndex levelMask(int level) {
