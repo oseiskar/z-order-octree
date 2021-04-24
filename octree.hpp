@@ -20,7 +20,7 @@ public:
     using Vector3 = std::array<Float, 3>;
     struct Parameters {
         Vector3 origin = { 0, 0, 0 };
-        float leafSize = 1.0;
+        Float leafSize = 1.0;
         bool stableSort = false;
         size_t rootLevel = std::numeric_limits<ZIndex>::digits / 3;
     };
@@ -140,8 +140,8 @@ public:
         // "end node" marker
         Node() :
           tree(nullptr),
-          zindex(0),
           level(-1),
+          zindex(0),
           elementsBegin(0),
           elementsEnd(0)
         {}
@@ -318,22 +318,6 @@ private:
           elements.data() + elementsEnd);
     }
 
-    Vector3 zIndexToPoint(ZIndex zindex, int level, Float cellOffset) const {
-        int coords[3] = { 0, 0, 0 };
-        for (int l = params.rootLevel; l >= level; --l) {
-            for (int d = 0; d < 3; ++d) {
-                int bit = (zindex >> (3*l + d)) & 0x1;
-                if (bit) coords[d] += 1 << level;
-            }
-        }
-        Vector3 v;
-        const Float offs = params.leafSize * (1 << level) * cellOffset;
-        for (int d = 0; d < 3; ++d) {
-            v[d] = coords[d] * params.leafSize + minCorner[d] + offs;
-        }
-        return v;
-    }
-
     static ZIndex levelMask(int level) {
         ZIndex mask = 0;
         for (int l = 0; l < level; ++l) {
@@ -368,11 +352,27 @@ private:
         return end;
     }
 
+    Vector3 zIndexToPoint(ZIndex zindex, int level, Float cellOffset) const {
+        int coords[3] = { 0, 0, 0 };
+        for (int l = params.rootLevel; l >= level; --l) {
+            for (int d = 0; d < 3; ++d) {
+                int bit = (zindex >> (3*l + d)) & 0x1;
+                if (bit) coords[d] += 1 << l;
+            }
+        }
+        Vector3 v;
+        const Float offs = params.leafSize * (1 << level) * cellOffset;
+        for (int d = 0; d < 3; ++d) {
+            v[d] = coords[d] * params.leafSize + minCorner[d] + offs;
+        }
+        return v;
+    }
+
     template <class Point> ZIndex getZIndex(const Point &xyz) const {
         ZIndex zindex = 0;
         const int maxCoord = 1 << params.rootLevel;
         for (int d = 0; d < 3; ++d) {
-            int coord = (xyz[d] - minCorner[d]) / params.leafSize;
+            int coord = int((xyz[d] - minCorner[d]) / params.leafSize);
             // log_debug("getZIndex, coord. %d: %g -> %d", d, xyz[d], coord);
             if (coord < 0 || coord >= maxCoord) return INVALID_COORD;
             zindex |= interleaveBits(coord) << d;
