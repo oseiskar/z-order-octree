@@ -75,12 +75,35 @@ int main() {
     generateData(vertices);
     printf("generated %zu points\n", vertices.size());
 
-    Timer timer("octree build");
-    ZOrderOctree<Vertex, Coordinate> octree(
-        vertices.data(),
-        vertices.data() + vertices.size(),
-        { .leafSize = 0.1 });
-    timer.stop();
+    ZOrderOctree<Vertex, Coordinate> octree({ .leafSize = 0.1 });
+    auto work = octree.buildWorkspace();
+
+    {
+      Timer timer("octree build 1/2");
+      octree.addData(
+          vertices.data(),
+          vertices.size() / 2,
+          &work);
+    }
+    {
+      Timer timer("octree build 1/2");
+      octree.addData(
+          vertices.data() + vertices.size() / 2,
+          vertices.size() - vertices.size() / 2,
+          &work);
+    }
+    {
+      Timer timer("octree data removal");
+      size_t nRemoved = 0;
+      octree.removeData([&nRemoved](const Vertex &v) -> bool {
+          if (v[0] >= 10.0 && v[1] > 20) {
+            nRemoved++;
+            return true;
+          }
+          return false;
+      });
+      printf("removed %zu point(s)\n", nRemoved);
+    }
 
     {
         Timer timer("lookup");

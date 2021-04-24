@@ -29,25 +29,54 @@ public:
         std::vector<size_t> order;
         std::vector<ZIndex> zindices;
         std::vector<const Element*> elements;
+
+        void clear() {
+            order.clear();
+            zindices.clear();
+            elements.clear();
+        }
+
+        void reserve(size_t n) {
+            order.reserve(n);
+            zindices.reserve(n);
+            elements.reserve(n);
+        }
     };
 
-    ZOrderOctree(const Element* elementsBegin, const Element *elementsEnd, const Parameters &params, Workspace *workspace = nullptr)
+    ZOrderOctree(const Parameters &params)
     :
-        rootLevel(params.rootLevel),
-        minCorner(saxpy(-params.leafSize * (1 << (params.rootLevel - 1)), { 1, 1, 1 }, params.origin)),
-        leafSize(params.leafSize)
+        params(params),
+        minCorner(saxpy(-params.leafSize * (1 << (params.rootLevel - 1)), { 1, 1, 1 }, params.origin))
     {
-        assert(rootLevel <= std::numeric_limits<ZIndex>::digits / 3);
+        assert(params.rootLevel <= std::numeric_limits<ZIndex>::digits / 3);
+    }
 
+    void clear() {
+        zindices.clear();
+        elements.clear();
+    }
+
+    void addData(const Element* elementsBegin, size_t nElements, Workspace *workspace = nullptr) {
         // log_debug("minCorner %g,%g,%g", minCorner[0], minCorner[1], minCorner[2]);
         Workspace workNew;
         Workspace *tmp = workspace;
         if (!tmp) tmp = &workNew;
-        tmp->elements.clear();
-        tmp->zindices.clear();
-        tmp->order.clear();
+        tmp->clear();
+        tmp->reserve(nElements + zindices.size());
 
-        for (const auto *itr = elementsBegin; itr != elementsEnd; ++itr) {
+        assert(zindices.size() == elements.size());
+
+        // add existing data (note: it could be faster to do a custom merge-sort)
+        for (size_t i = 0; i < zindices.size(); ++i) {
+            tmp->zindices.push_back(zindices.at(i));
+            tmp->elements.push_back(elements.at(i));
+            tmp->order.push_back(tmp->order.size());
+        }
+
+        zindices.clear();
+        elements.clear();
+
+        for (const auto *itr = elementsBegin; itr != (elementsBegin + nElements); ++itr) {
             tmp->elements.push_back(&*itr);
             tmp->zindices.push_back(getZIndex(*itr));
             tmp->order.push_back(tmp->order.size());
@@ -64,6 +93,7 @@ public:
         }
 
         elements.reserve(tmp->elements.size());
+        zindices.reserve(tmp->zindices.size());
         for (size_t idx : tmp->order) {
             const auto zidx = tmp->zindices.at(idx);
             if (zidx == INVALID_COORD) break;
@@ -72,6 +102,28 @@ public:
             zindices.push_back(tmp->zindices.at(idx));
             elements.push_back(tmp->elements.at(idx));
         }
+    }
+
+    template <class Predicate> void removeData(const Predicate &func) {
+        auto zIdxIn = zindices.begin();
+        auto elemIn = elements.begin();
+        auto zIdxOut = zIdxIn;
+        auto elemOut = elemIn;
+        while (elemIn != elements.end()) {
+            if (!func(**elemIn)) {
+              *elemOut++ = *elemIn;
+              *zIdxOut++ = *zIdxIn;
+            }
+            elemIn++;
+            zIdxIn++;
+        }
+        const size_t nLeft = elemOut - elements.begin();
+        elements.resize(nLeft);
+        zindices.resize(nLeft);
+    }
+
+    Workspace buildWorkspace() const {
+        return {};
     }
 
     class ElementRange {
@@ -189,7 +241,7 @@ public:
         }
 
         Float sideLength() const {
-            return tree->leafSize * (1 << level);
+            return tree->params.leafSize * (1 << level);
         }
 
     private:
@@ -246,7 +298,7 @@ public:
     };
 
     template<class Point> Node lookup(const Point &point, int level) const {
-        assert(level >= 0 && level < rootLevel);
+        assert(level >= 0 && level < params.rootLevel);
         ZIndex zindex = getZIndex(point);
         if (zindex == INVALID_COORD) return Node();
 
@@ -254,11 +306,11 @@ public:
     }
 
     Node root() const {
-        return Node(*this, zindices.empty() ? 0 : *zindices.begin(), rootLevel);
+        return Node(*this, zindices.empty() ? 0 : *zindices.begin(), params.rootLevel);
     }
 
     NodeRange nodesAtLevel(int level) const {
-        assert(level >= 0 && level < rootLevel);
+        assert(level >= 0 && level < params.rootLevel);
         return NodeRange(Node(*this, zindices.empty() ? 0 : *zindices.begin(), level), false);
     }
 
@@ -271,16 +323,16 @@ private:
 
     Vector3 zIndexToPoint(ZIndex zindex, int level, Float cellOffset) const {
         int coords[3] = { 0, 0, 0 };
-        for (int l = rootLevel; l >= level; --l) {
+        for (int l = params.rootLevel; l >= level; --l) {
             for (int d = 0; d < 3; ++d) {
                 int bit = (zindex >> (3*l + d)) & 0x1;
                 if (bit) coords[d] += 1 << level;
             }
         }
         Vector3 v;
-        const Float offs = leafSize * (1 << level) * cellOffset;
+        const Float offs = params.leafSize * (1 << level) * cellOffset;
         for (int d = 0; d < 3; ++d) {
-            v[d] = coords[d] * leafSize + minCorner[d] + offs;
+            v[d] = coords[d] * params.leafSize + minCorner[d] + offs;
         }
         return v;
     }
@@ -321,9 +373,9 @@ private:
 
     template <class Point> ZIndex getZIndex(const Point &xyz) const {
         ZIndex zindex = 0;
-        const int maxCoord = 1 << rootLevel;
+        const int maxCoord = 1 << params.rootLevel;
         for (int d = 0; d < 3; ++d) {
-            int coord = (xyz[d] - minCorner[d]) / leafSize;
+            int coord = (xyz[d] - minCorner[d]) / params.leafSize;
             // log_debug("getZIndex, coord. %d: %g -> %d", d, xyz[d], coord);
             if (coord < 0 || coord >= maxCoord) return INVALID_COORD;
             zindex |= interleaveBits(coord) << d;
@@ -344,9 +396,8 @@ private:
         return static_cast<ZIndex>(x);
     }
 
-    const ZIndex rootLevel;
+    const Parameters params;
     const Vector3 minCorner;
-    const float leafSize;
     std::vector<size_t> zindices;
     std::vector<const Element*> elements;
 };
