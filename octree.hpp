@@ -1,8 +1,9 @@
 #pragma once
 
 #include <algorithm>
-#include <cassert>
 #include <array>
+#include <cassert>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <vector>
@@ -27,10 +28,8 @@ public:
         size_t rootLevel = MAX_ROOT_LEVEL;
     };
 
-    ZOrderOctree(const Parameters &params)
-    :
-        params(params),
-        minCorner(saxpy(-params.leafSize * (1 << (params.rootLevel - 1)), { 1, 1, 1 }, params.origin))
+    ZOrderOctree(const Parameters &params) :
+        params(params)
     {
         assert(params.rootLevel <= MAX_ROOT_LEVEL);
     }
@@ -363,9 +362,10 @@ private:
             }
         }
         Vector3 v;
+        const int halfMaxCoord = (1 << params.rootLevel) / 2;
         const Float offs = params.leafSize * (1 << level) * cellOffset;
         for (int d = 0; d < 3; ++d) {
-            v[d] = coords[d] * params.leafSize + minCorner[d] + offs;
+            v[d] = (coords[d] - halfMaxCoord) * params.leafSize + params.origin[d] + offs;
         }
         return v;
     }
@@ -373,8 +373,9 @@ private:
     template <class Point> ZIndex getZIndex(const Point &xyz) const {
         ZIndex zindex = 0;
         const int maxCoord = 1 << params.rootLevel;
+        const int halfMaxCoord = maxCoord / 2; // params.leafSize * (1 << (params.rootLevel - 1)
         for (int d = 0; d < 3; ++d) {
-            int coord = int((xyz[d] - minCorner[d]) / params.leafSize);
+            int coord = std::floor((xyz[d] - params.origin[d]) / params.leafSize) + halfMaxCoord;
             // log_debug("getZIndex, coord. %d: %g -> %d", d, xyz[d], coord);
             if (coord < 0 || coord >= maxCoord) return INVALID_COORD;
             zindex |= interleaveBits(coord) << d;
@@ -396,7 +397,6 @@ private:
     }
 
     const Parameters params;
-    const Vector3 minCorner;
     std::vector<size_t> zindices;
     std::vector<const Element*> elements;
 };
