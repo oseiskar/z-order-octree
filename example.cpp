@@ -45,25 +45,39 @@ template <class Vertex> void generateData(std::vector<Vertex> &vertices) {
     }
 }
 
-template <class Node> void traverse(const Node &node) {
-    if (node.elements().size() > 130000) {
+template <class Node> size_t traverse(const Node &node) {
+    const size_t nEls = node.elements().size();
+    if (nEls > 130000) {
       const auto c = node.center();
       printf("node (%g, %g, %g) with %zu elements @ level %d, size %g\n",
         c[0], c[1], c[2],
-        node.elements().size(),
+        nEls,
         node.getLevel(),
         node.sideLength());
+
+      auto corner0 = node.minCorner();
+      auto corner1 = node.maxCorner();
+
+      for (const auto *point : node.elements()) {
+          for (int c = 0; c < 3; ++c) {
+              float coord = (*point)[c];
+              constexpr double MARGIN = 0.01;
+              // printf("c%d: %g, [%g, %g]\n", c, coord, corner0[c], corner1[c]);
+              assert(coord > corner0[c] - MARGIN && coord < corner1[c] + MARGIN);
+          }
+      }
     }
 
-    /*log_debug("%s%s%s",
-      node.isLastSibling() ? " last sibling" : "",
-      node.isLastAtThisLevel() ? " last at level" : "",
-      node.isLeaf() ? " leaf" : "");*/
-
-    if (!node.isLeaf()) for (auto child : node.children()) {
+    if (!node.isLeaf()) {
+      size_t childSizes = 0;
+      for (auto child : node.children()) {
         // log_debug("child of node at level %d", node.getLevel());
-        traverse(child);
+        childSizes += traverse(child);
+      }
+      assert(childSizes == nEls);
     }
+
+    return nEls;
 }
 }
 
@@ -106,7 +120,8 @@ int main() {
 
     {
         Timer timer("lookup");
-        for (const auto *point : octree.lookup(Vertex { 0, 0, 0 }, 4).elements()) {
+        auto node = octree.lookup(Vertex { 0, 0, 0 }, 4);
+        for (const auto *point : node.elements()) {
             printf("%g\t%g\t%g\n", (*point)[0], (*point)[1], (*point)[2]);
         }
     }
@@ -119,10 +134,16 @@ int main() {
         traverse(octree.root());
     }
 
+    size_t totalPoints = octree.root().elements().size();
     {
-        Timer timer("level traversal");
-        for (const auto node : octree.nodesAtLevel(16)) {
-            printf("lev %d: non-empty node with %zu elements\n", node.getLevel(), node.elements().size());
+        for (int level = 0; level < octree.root().getLevel(); ++level) {
+          Timer timer("level traversal");
+          size_t levelPoints = 0;
+          for (const auto node : octree.nodesAtLevel(16)) {
+              levelPoints += node.elements().size();
+              //printf("lev %d: non-empty node with %zu elements\n", node.getLevel(), node.elements().size());
+          }
+          printf("level %d: %zu points\n", level, levelPoints);
         }
     }
 

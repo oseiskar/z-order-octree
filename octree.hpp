@@ -17,12 +17,14 @@
 template <class Element, class Float = float, class ZIndex = std::uint64_t>
 class ZOrderOctree {
 public:
+    // Note: "should" also work with 1 more bit but something is broken
+    static constexpr size_t MAX_ROOT_LEVEL = std::numeric_limits<ZIndex>::digits / 3 - 1;
     using Vector3 = std::array<Float, 3>;
     struct Parameters {
         Vector3 origin = { 0, 0, 0 };
         Float leafSize = 1.0;
         bool stableSort = false;
-        size_t rootLevel = std::numeric_limits<ZIndex>::digits / 3;
+        size_t rootLevel = MAX_ROOT_LEVEL;
     };
 
     ZOrderOctree(const Parameters &params)
@@ -30,7 +32,7 @@ public:
         params(params),
         minCorner(saxpy(-params.leafSize * (1 << (params.rootLevel - 1)), { 1, 1, 1 }, params.origin))
     {
-        assert(params.rootLevel <= std::numeric_limits<ZIndex>::digits / 3);
+        assert(params.rootLevel <= MAX_ROOT_LEVEL);
     }
 
     void clear() {
