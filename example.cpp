@@ -121,9 +121,22 @@ int main() {
     {
         Timer timer("lookup");
         auto node = octree.lookup(Vertex { 0, 0, 0 }, 4);
+        printf("%zu points\n", node.elements().size());
         for (const auto *point : node.elements()) {
             printf("%g\t%g\t%g\n", (*point)[0], (*point)[1], (*point)[2]);
         }
+    }
+
+    {
+        Timer timer("radius lookup");
+        for (const auto *point : octree.searchWithRadius(Vertex { 0, 0, 0 }, 0.8)) {
+            printf("r %g\t%g\t%g\n", (*point)[0], (*point)[1], (*point)[2]);
+        }
+    }
+
+    {
+        Timer timer("radius lookup, full tree");
+        assert(!octree.searchWithRadius(Vertex { 0, 0, 0 }, 10000000).empty());
     }
 
     printf("%zu elements in a probably empty node\n",

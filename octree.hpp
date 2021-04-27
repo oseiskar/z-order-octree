@@ -124,8 +124,7 @@ public:
 
     class NodeRange;
 
-    class Node {
-    public:
+    struct Node {
         Node(const ZOrderOctree &t, ZIndex zidx, int level) :
             tree(&t),
             level(level),
@@ -224,7 +223,11 @@ public:
             return tree->params.leafSize * (1 << level);
         }
 
-    private:
+        bool isRoot() const {
+            return level == tree->params.rootLevel;
+        }
+
+        // internal, do not use directly
         const ZOrderOctree *tree;
         int level;
         ZIndex zindex;
@@ -294,6 +297,152 @@ public:
         return NodeRange(Node(*this, zindices.empty() ? 0 : *zindices.begin(), level), false);
     }
 
+    class RadiusSearchIterator {
+    public:
+        const Element *operator*() const {
+            assert(currentNodeIdx < nodeCount);
+            return nodes[currentNodeIdx].tree->elements.at(currentElementIdx);
+        }
+
+        RadiusSearchIterator &operator++() { // prefix OP, ++itr
+            assert(currentNodeIdx < nodeCount && currentNodeIdx < 8);
+            findNext(false);
+            return *this;
+        }
+
+        // note: do not compare these from two unrelated ranges
+        bool operator==(const RadiusSearchIterator &other) const {
+            return currentNodeIdx == other.currentNodeIdx &&
+                currentElementIdx == other.currentElementIdx;
+        }
+
+        bool operator!=(const RadiusSearchIterator &other) const {
+            return !(*this == other);
+        }
+
+        RadiusSearchIterator(
+            size_t nodeCount,
+            bool end = true,
+            Float searchRadius = 0,
+            const Vector3 *searchCenter = nullptr,
+            Node *nodesPtr = nullptr)
+        :
+            nodeCount(nodeCount),
+            currentNodeIdx(nodeCount),
+            currentElementIdx(0)
+        {
+            assert(nodeCount <= 8);
+            if (!end) {
+                searchRadiusSquared = searchRadius*searchRadius;
+                this->searchCenter = *searchCenter;
+                for (size_t i = 0; i < nodeCount; ++i) nodes[i] = nodesPtr[i];
+                currentNodeIdx = 0;
+                if (nodeCount > 0) {
+                    currentElementIdx = nodes[currentNodeIdx].elementsBegin;
+                    findNext(true);
+                }
+            }
+            // log_debug("iterator %zu/%zu, %zu", currentNodeIdx, nodeCount, currentElementIdx);
+        }
+
+        size_t getNodeCount() const {
+            return nodeCount;
+        }
+
+    private:
+        void findNext(bool checkFirst) {
+            if (checkFirst && (
+                currentNodeIdx >= nodeCount ||
+                currentElementIdx >= nodes[currentNodeIdx].elementsEnd)) return;
+
+            bool checkCurrent = checkFirst;
+            while (true) {
+                // log_debug("search %zu/%zu, %zu in %zu - %zu", currentNodeIdx, nodeCount, currentElementIdx,
+                //    nodes[currentNodeIdx].elementsBegin,  nodes[currentNodeIdx].elementsEnd);
+                if (checkCurrent) {
+                    const Element &el = *nodes[currentNodeIdx].tree->elements.at(currentElementIdx);
+                    Float r2 = 0;
+                    for (int c = 0; c < 3; ++c) {
+                        Float d = el[c] - searchCenter[c];
+                        r2 += d*d;
+                    }
+                    // log_debug("%g/%g (%g, %g, %g)", std::sqrt(r2), std::sqrt(searchRadiusSquared), el[0], el[1], el[2]);
+                    if (r2 < searchRadiusSquared) break;
+                }
+                checkCurrent = true;
+
+                if (++currentElementIdx >= nodes[currentNodeIdx].elementsEnd) {
+                    if (++currentNodeIdx < nodeCount) {
+                        currentElementIdx = nodes[currentNodeIdx].elementsBegin;
+                    } else {
+                        // end node
+                        currentElementIdx = 0;
+                        break;
+                    }
+                }
+            }
+        }
+
+        size_t currentNodeIdx, currentElementIdx;
+        size_t nodeCount;
+        Node nodes[8];
+        Vector3 searchCenter;
+        Float searchRadiusSquared;
+    };
+
+    class RadiusSearchRange {
+    private:
+        RadiusSearchIterator b, e;
+
+    public:
+        RadiusSearchRange(RadiusSearchIterator begin) :
+          b(begin), e(begin.getNodeCount())
+        {}
+
+        RadiusSearchIterator begin() const { return b; }
+        RadiusSearchIterator end() const { return e; }
+        bool empty() const { return b == e; }
+    };
+
+    template<class Point> RadiusSearchRange searchWithRadius(const Point &point, Float radius) const {
+        // TODO: breaks / overflows with very large radii like 1e10
+
+        int searchLevel = 0;
+        const Vector3 searchCenter = { point[0], point[1], point[2] };
+        while (nodeCountWithinBox(searchCenter, radius, searchLevel) > 8) {
+            assert(searchLevel < params.rootLevel);
+            searchLevel++;
+        }
+
+        Node nodes[8];
+        size_t nodeCount = 0;
+        for (int dx = -1; dx <= 1; dx += 2) {
+            for (int dy = -1; dy <= 1; dy += 2) {
+                for (int dz = -1; dz <= 1; dz += 2) {
+                    Vector3 corner = searchCenter;
+                    corner[0] += dx * radius;
+                    corner[1] += dy * radius;
+                    corner[2] += dz * radius;
+                    ZIndex zindex = getZIndex(corner, true) & levelMask(searchLevel);
+                    // log_debug("corner (%g, %g, %g) zindex %lx", corner[0], corner[1], corner[2], zindex);
+                    for (size_t j = 0; j < nodeCount; ++j) {
+                        if (zindex == nodes[j].zindex) {
+                            // log_debug("equal to corner %zu", j);
+                            goto NEXT_CORNER;
+                        }
+                    }
+
+                    assert(nodeCount < 8);
+                    nodes[nodeCount++] = Node(*this, zindex, searchLevel);
+
+                    NEXT_CORNER: (void)0;
+                }
+            }
+        }
+        // assert(nodeCount == nodeCountWithinBox(searchCenter, radius, searchLevel));
+        return RadiusSearchRange(RadiusSearchIterator(nodeCount, false, radius, &searchCenter, nodes));
+    }
+
 private:
     struct Workspace {
         std::vector<size_t> order;
@@ -353,6 +502,18 @@ private:
         return end;
     }
 
+    inline int maxCoord() const {
+        return 1 << params.rootLevel;
+    }
+
+    inline int halfMaxCoord() const {
+        return (1 << params.rootLevel) / 2;
+    }
+
+    inline int floatToCoord(Float c, int dim) const {
+        return std::floor((c - params.origin[dim]) / params.leafSize) + halfMaxCoord();
+    }
+
     Vector3 zIndexToPoint(ZIndex zindex, int level, Float cellOffset) const {
         int coords[3] = { 0, 0, 0 };
         for (int l = params.rootLevel; l >= level; --l) {
@@ -362,26 +523,48 @@ private:
             }
         }
         Vector3 v;
-        const int halfMaxCoord = (1 << params.rootLevel) / 2;
         const Float offs = params.leafSize * (1 << level) * cellOffset;
         for (int d = 0; d < 3; ++d) {
-            v[d] = (coords[d] - halfMaxCoord) * params.leafSize + params.origin[d] + offs;
+            v[d] = (coords[d] - halfMaxCoord()) * params.leafSize + params.origin[d] + offs;
         }
         return v;
     }
 
-    template <class Point> ZIndex getZIndex(const Point &xyz) const {
+    template <class Point> ZIndex getZIndex(const Point &xyz, bool capped = false) const {
         ZIndex zindex = 0;
-        const int maxCoord = 1 << params.rootLevel;
-        const int halfMaxCoord = maxCoord / 2; // params.leafSize * (1 << (params.rootLevel - 1)
         for (int d = 0; d < 3; ++d) {
-            int coord = std::floor((xyz[d] - params.origin[d]) / params.leafSize) + halfMaxCoord;
+            int coord = floatToCoord(xyz[d], d);
             // log_debug("getZIndex, coord. %d: %g -> %d", d, xyz[d], coord);
-            if (coord < 0 || coord >= maxCoord) return INVALID_COORD;
+            if (coord < 0) {
+                if (capped) coord = 0;
+                return INVALID_COORD;
+            }
+            else if (coord >= maxCoord()) {
+                if (capped) coord = maxCoord() - 1;
+                return INVALID_COORD;
+            }
             zindex |= interleaveBits(coord) << d;
         }
         // log_debug("getZIndex -> %lx", zindex);
         return zindex;
+    }
+
+    size_t nodeCountWithinBox(const Vector3 &center, Float radius, int level) const {
+        size_t count = 1;
+        for (int d = 0; d < 3; ++d) {
+            int range = 1;
+            for (int sign = -1; sign <= 1; sign += 2) {
+                int coord = floatToCoord(center[d] + sign*radius, d);
+                if (coord < 0) coord = 0;
+                if (coord >= maxCoord()) coord = maxCoord() - 1;
+                coord = coord >> level;
+                range += coord * sign;
+            }
+            assert(range >= 0);
+            count *= range;
+        }
+        // log_debug("nodeCountWithinBox %g, %d -> %zu", radius, level, count);
+        return count;
     }
 
     static ZIndex interleaveBits(ZIndex coord) {
