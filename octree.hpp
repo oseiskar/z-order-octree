@@ -349,6 +349,15 @@ public:
             return nodeCount;
         }
 
+        bool containsAllElements() const {
+            if (nodeCount == 0) return false;
+            assert(nodes[0].tree);
+            const auto &tree = *nodes[0].tree;
+            if (nodeCount == 1) return nodes[0].level == tree.params.rootLevel;
+            if (nodeCount == 8) return nodes[0].level == tree.params.rootLevel - 1;
+            return false;
+        }
+
     private:
         void findNext(bool checkFirst) {
             if (checkFirst && (
@@ -402,11 +411,10 @@ public:
         RadiusSearchIterator begin() const { return b; }
         RadiusSearchIterator end() const { return e; }
         bool empty() const { return b == e; }
+        bool containsAllElements() const { return b.containsAllElements(); }
     };
 
     template<class Point> RadiusSearchRange searchWithRadius(const Point &point, Float radius) const {
-        // TODO: breaks / overflows with very large radii like 1e10
-
         int searchLevel = 0;
         const Vector3 searchCenter = { point[0], point[1], point[2] };
         while (nodeCountWithinBox(searchCenter, radius, searchLevel) > 8) {
@@ -443,11 +451,62 @@ public:
         return RadiusSearchRange(RadiusSearchIterator(nodeCount, false, radius, &searchCenter, nodes));
     }
 
+    // note: not thread-safe & modifies workspace
+    template <class Point> void kNearestNeighbors(const Point &center, size_t k, std::vector<const Element *> &result, bool sorted = false) {
+        result.clear();
+        if (k == 0) return;
+
+        auto &heap = tmp.knnHeap;
+        heap.clear();
+
+        Float searchRadius = params.leafSize * 0.5;
+        while (true) {
+            HeapElement heapEl;
+            auto search = searchWithRadius(center, searchRadius);
+            for (const Element *el : search) {
+                heapEl.r2 = 0;
+                for (int c = 0; c < 3; ++c) {
+                    Float d = (*el)[c] - center[c];
+                    heapEl.r2 += d*d;
+                }
+                heapEl.element = el;
+                if (heap.size() < k) {
+                    heap.push_back(heapEl);
+                    if (heap.size() == k) std::make_heap(heap.begin(), heap.end());
+                } else if (!(heap.front() < heapEl)) {
+                    std::pop_heap(heap.begin(), heap.end());
+                    heap.back() = heapEl;
+                    std::push_heap(heap.begin(), heap.end());
+                }
+            }
+            // log_debug("radius %g, heap size %zu", searchRadius, heap.size());
+            if (search.containsAllElements() || heap.size() == k) break;
+            searchRadius *= 2;
+        }
+
+        if (sorted) {
+            if (params.stableSort) std::stable_sort(heap.begin(), heap.end());
+            else std::sort(heap.begin(), heap.end());
+        }
+        result.reserve(heap.size());
+        for (const auto &e : heap) result.push_back(e.element);
+    }
+
 private:
+    struct HeapElement {
+        const Element *element;
+        Float r2;
+
+        bool operator<(const HeapElement &other) const {
+            return r2 < other.r2;
+        }
+    };
+
     struct Workspace {
         std::vector<size_t> order;
         std::vector<ZIndex> zindices;
         std::vector<const Element*> elements;
+        std::vector<HeapElement> knnHeap;
 
         void clear() {
             order.clear();
@@ -510,8 +569,23 @@ private:
         return (1 << params.rootLevel) / 2;
     }
 
-    inline int floatToCoord(Float c, int dim) const {
-        return std::floor((c - params.origin[dim]) / params.leafSize) + halfMaxCoord();
+    inline int floatToCoord(Float c, int dim, bool capped) const {
+        const int max = maxCoord();
+        Float rel = (c - params.origin[dim]) / params.leafSize;
+
+        const Float maxF = max; // avoid integer overflow issues
+        rel = std::min(rel, maxF);
+        rel = std::max(rel, -maxF);
+        int coord = std::floor(rel) + halfMaxCoord();
+
+        if (coord < 0) {
+            if (capped) return 0;
+            return -1;
+        } else if (coord >= max) {
+            if (capped) return max - 1;
+            return -1;
+        }
+        return coord;
     }
 
     Vector3 zIndexToPoint(ZIndex zindex, int level, Float cellOffset) const {
@@ -533,16 +607,8 @@ private:
     template <class Point> ZIndex getZIndex(const Point &xyz, bool capped = false) const {
         ZIndex zindex = 0;
         for (int d = 0; d < 3; ++d) {
-            int coord = floatToCoord(xyz[d], d);
-            // log_debug("getZIndex, coord. %d: %g -> %d", d, xyz[d], coord);
-            if (coord < 0) {
-                if (capped) coord = 0;
-                return INVALID_COORD;
-            }
-            else if (coord >= maxCoord()) {
-                if (capped) coord = maxCoord() - 1;
-                return INVALID_COORD;
-            }
+            int coord = floatToCoord(xyz[d], d, capped);
+            if (coord < 0) return INVALID_COORD;
             zindex |= interleaveBits(coord) << d;
         }
         // log_debug("getZIndex -> %lx", zindex);
@@ -554,9 +620,8 @@ private:
         for (int d = 0; d < 3; ++d) {
             int range = 1;
             for (int sign = -1; sign <= 1; sign += 2) {
-                int coord = floatToCoord(center[d] + sign*radius, d);
-                if (coord < 0) coord = 0;
-                if (coord >= maxCoord()) coord = maxCoord() - 1;
+                int coord = floatToCoord(center[d] + sign*radius, d, true);
+                assert(coord >= 0);
                 coord = coord >> level;
                 range += coord * sign;
             }

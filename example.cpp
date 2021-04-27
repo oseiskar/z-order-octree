@@ -136,11 +136,22 @@ int main() {
 
     {
         Timer timer("radius lookup, full tree");
-        assert(!octree.searchWithRadius(Vertex { 0, 0, 0 }, 10000000).empty());
+        assert(octree.searchWithRadius(Vertex { 0, 0, 0 }, 10000000).containsAllElements());
     }
 
     printf("%zu elements in a probably empty node\n",
         octree.lookup(Vertex { 10, 10, 10 }, 0).elements().size());
+
+    {
+        Timer timer("kNN lookup");
+        constexpr size_t k = 10;
+        std::vector<const Vertex*> result;
+        octree.kNearestNeighbors(Vertex { 0.234, 0.676, -0.234 }, k, result);
+        assert(result.size() == k);
+        for (const auto *point : result) {
+            printf("knn %g\t%g\t%g\n", (*point)[0], (*point)[1], (*point)[2]);
+        }
+    }
 
     {
         Timer timer("full traversal");
@@ -156,6 +167,7 @@ int main() {
               levelPoints += node.elements().size();
               //printf("lev %d: non-empty node with %zu elements\n", node.getLevel(), node.elements().size());
           }
+          assert(levelPoints == totalPoints);
           printf("level %d: %zu points\n", level, levelPoints);
         }
     }
