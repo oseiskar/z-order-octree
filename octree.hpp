@@ -25,6 +25,7 @@ public:
         Vector3 origin = { 0, 0, 0 };
         Float leafSize = 1.0;
         bool stableSort = false;
+        bool sortKnnResponse = false;
         size_t rootLevel = MAX_ROOT_LEVEL;
     };
 
@@ -360,15 +361,13 @@ public:
 
     private:
         void findNext(bool checkFirst) {
-            if (checkFirst && (
-                currentNodeIdx >= nodeCount ||
-                currentElementIdx >= nodes[currentNodeIdx].elementsEnd)) return;
+            if (currentNodeIdx >= nodeCount) return; // alerady at end
 
             bool checkCurrent = checkFirst;
             while (true) {
-                // log_debug("search %zu/%zu, %zu in %zu - %zu", currentNodeIdx, nodeCount, currentElementIdx,
-                //    nodes[currentNodeIdx].elementsBegin,  nodes[currentNodeIdx].elementsEnd);
-                if (checkCurrent) {
+                //log_debug("search %zu/%zu, %zu in %zu - %zu %s", currentNodeIdx, nodeCount, currentElementIdx,
+                //    nodes[currentNodeIdx].elementsBegin,  nodes[currentNodeIdx].elementsEnd, checkCurrent ? " cur" : "");
+                if (checkCurrent && currentElementIdx < nodes[currentNodeIdx].elementsEnd) {
                     const Element &el = *nodes[currentNodeIdx].tree->elements.at(currentElementIdx);
                     Float r2 = 0;
                     for (int c = 0; c < 3; ++c) {
@@ -415,7 +414,7 @@ public:
     };
 
     template<class Point> RadiusSearchRange searchWithRadius(const Point &point, Float radius) const {
-        int searchLevel = 0;
+        size_t searchLevel = 0;
         const Vector3 searchCenter = { point[0], point[1], point[2] };
         while (nodeCountWithinBox(searchCenter, radius, searchLevel) > 8) {
             assert(searchLevel < params.rootLevel);
@@ -452,7 +451,7 @@ public:
     }
 
     // note: not thread-safe & modifies workspace
-    template <class Point> void kNearestNeighbors(const Point &center, size_t k, std::vector<const Element *> &result, bool sorted = false) {
+    template <class Point> void kNearestNeighbors(const Point &center, size_t k, std::vector<const Element *> &result, Float maxRadius = -1) {
         result.clear();
         if (k == 0) return;
 
@@ -461,6 +460,7 @@ public:
 
         Float searchRadius = params.leafSize * 0.5;
         while (true) {
+            if (maxRadius > 0 && searchRadius > maxRadius) searchRadius = maxRadius;
             HeapElement heapEl;
             auto search = searchWithRadius(center, searchRadius);
             for (const Element *el : search) {
@@ -480,11 +480,11 @@ public:
                 }
             }
             // log_debug("radius %g, heap size %zu", searchRadius, heap.size());
-            if (search.containsAllElements() || heap.size() == k) break;
+            if (search.containsAllElements() || heap.size() == k || searchRadius == maxRadius) break;
             searchRadius *= 2;
         }
 
-        if (sorted) {
+        if (params.sortKnnResponse) {
             if (params.stableSort) std::stable_sort(heap.begin(), heap.end());
             else std::sort(heap.begin(), heap.end());
         }

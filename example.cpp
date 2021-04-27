@@ -139,6 +139,8 @@ int main() {
         assert(octree.searchWithRadius(Vertex { 0, 0, 0 }, 10000000).containsAllElements());
     }
 
+    assert(octree.searchWithRadius(Vertex { 1e10, -1e10, 1e5 }, 0.1).empty());
+
     printf("%zu elements in a probably empty node\n",
         octree.lookup(Vertex { 10, 10, 10 }, 0).elements().size());
 
