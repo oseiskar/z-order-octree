@@ -282,7 +282,7 @@ public:
     };
 
     template<class Point> Node lookup(const Point &point, int level) const {
-        assert(level >= 0 && level < params.rootLevel);
+        assert(level >= 0 && level < int(params.rootLevel));
         ZIndex zindex = getZIndex(point);
         if (zindex == INVALID_COORD) return Node();
 
@@ -294,7 +294,7 @@ public:
     }
 
     NodeRange nodesAtLevel(int level) const {
-        assert(level >= 0 && level < params.rootLevel);
+        assert(level >= 0 && level < int(params.rootLevel));
         return NodeRange(Node(*this, zindices.empty() ? 0 : *zindices.begin(), level), false);
     }
 
@@ -328,9 +328,9 @@ public:
             const Vector3 *searchCenter = nullptr,
             Node *nodesPtr = nullptr)
         :
-            nodeCount(nodeCount),
             currentNodeIdx(nodeCount),
-            currentElementIdx(0)
+            currentElementIdx(0),
+            nodeCount(nodeCount)
         {
             assert(nodeCount <= 8);
             if (!end) {
@@ -354,8 +354,8 @@ public:
             if (nodeCount == 0) return false;
             assert(nodes[0].tree);
             const auto &tree = *nodes[0].tree;
-            if (nodeCount == 1) return nodes[0].level == tree.params.rootLevel;
-            if (nodeCount == 8) return nodes[0].level == tree.params.rootLevel - 1;
+            if (nodeCount == 1) return nodes[0].level == int(tree.params.rootLevel);
+            if (nodeCount == 8) return nodes[0].level == int(tree.params.rootLevel) - 1;
             return false;
         }
 
